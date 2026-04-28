@@ -2,6 +2,9 @@ import socket
 import struct
 import time
 import datetime
+import threading
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
 
 class SocketServer:
     def __init__(self, host, port, password):
@@ -116,21 +119,27 @@ class RconHandler:
 
         return schedule
 
-    # 指定時間毎にコマンドを実行するメソッド
-    def execute_command_periodically(self, command, interval_seconds, notify_time=None, notify_message=None):
+    # 指定時間毎にコマンドを実行するメソッド（stop_event で停止可能）
+    def execute_command_periodically(self, command, interval_seconds, notify_time=None, notify_message=None, stop_event=None, log_callback=None):
         if interval_seconds <= 0:
             raise ValueError("interval_seconds は 1 以上を指定してください")
 
         notify_offsets = self._parse_time_schedule(notify_time) if notify_time is not None else []
 
-        while True:
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
+        while not (stop_event and stop_event.is_set()):
             run_started_at = datetime.datetime.now()
             try:
                 response = self.execute_command(command)
                 self.execute_command(f"ServerChat (System){response}")
-                print(f"{run_started_at}: {response}")
+                log(f"{run_started_at}: {response}")
             except Exception as e:
-                print(f"エラー: {e}")
+                log(f"エラー: {e}")
 
             next_run_at = run_started_at + datetime.timedelta(seconds=interval_seconds)
             notify_candidates = []
@@ -141,7 +150,7 @@ class RconHandler:
 
             sent_notifications = set()
 
-            while True:
+            while not (stop_event and stop_event.is_set()):
                 now = datetime.datetime.now()
 
                 for notify_at in notify_candidates:
@@ -155,19 +164,29 @@ class RconHandler:
                             )
                         else:
                             message = f"{remaining_minutes} minutes until {command} command is executed"
-                        self.execute_command(f"ServerChat (System){message}")
+                        try:
+                            self.execute_command(f"ServerChat (System){message}")
+                            log(f"通知送信: {message}")
+                        except Exception as e:
+                            log(f"通知エラー: {e}")
 
                 if now >= next_run_at:
                     break
 
                 time.sleep(1)
 
-    # 指定時刻にコマンドを実行するメソッド
-    def execute_command_at_time(self, command, *target_time, notify_time=None, notify_message=None):
+    # 指定時刻にコマンドを実行するメソッド（stop_event で停止可能）
+    def execute_command_at_time(self, command, *target_time, notify_time=None, notify_message=None, stop_event=None, log_callback=None):
         schedule = self._parse_time_schedule(*target_time)
         notify_offsets = self._parse_time_schedule(notify_time) if notify_time is not None else []
 
-        while True:
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
+        while not (stop_event and stop_event.is_set()):
             now = datetime.datetime.now()
             run_candidates = []
             for hour, minute in schedule:
@@ -186,7 +205,7 @@ class RconHandler:
 
             sent_notifications = set()
 
-            while True:
+            while not (stop_event and stop_event.is_set()):
                 now = datetime.datetime.now()
 
                 for notify_at in notify_candidates:
@@ -200,15 +219,19 @@ class RconHandler:
                             )
                         else:
                             message = f"{remaining_minutes} minutes until {command} command is executed"
-                        self.execute_command(f"ServerChat (System){message}")
+                        try:
+                            self.execute_command(f"ServerChat (System){message}")
+                            log(f"通知送信: {message}")
+                        except Exception as e:
+                            log(f"通知エラー: {e}")
 
                 if now >= run_at:
                     try:
                         response = self.execute_command(command)
                         self.execute_command(f"ServerChat (System){response}")
-                        print(f"{now}: {response}")
+                        log(f"{now}: {response}")
                     except Exception as e:
-                        print(f"エラー: {e}")
+                        log(f"エラー: {e}")
                     break
 
                 time.sleep(1)
@@ -221,41 +244,273 @@ class ConstTime:
 
 class ConstCommand:
     DESTROY_WILD_DINOS = "DestroyWildDinos"
+    SHUTDOWN_SERVER = "ShutdownServer"
 
 
 ########################### 
+# デフォルト値（GUIの初期値として使用）
 HOST = "127.0.0.1"
 PORT = 27020
-PASSWORD = "password"
-# コマンドを実行する時刻を "H:MM" 形式で指定。例えば "0:00" は毎日0時、"6:00" は毎日6時に実行。
-TARGET_TIMES = ["00:00", "06:00", "12:00", "18:00"]
-# 通知時間を "H:MM" 形式で指定。例えば "1:00" はコマンド実行の1時間前、"0:30" は30分前、"0:10" は10分前に通知。
-NOTIFY_TIMES = ["1:00", "0:30", "0:10"]
-# 定期実行の例で、コマンドを実行する間隔を秒数で指定。
-PERIODIC_INTERVAL_SECONDS = ConstTime.HOUR * 6  
-# 通知メッセージ(文字化けにより日本語NG)
-NOTIFY_MESSAGE = "{remaining_minutes} minutes until {command} command is executed"
+PASSWORD = "mypassword"
 ###########################
 
-if __name__ == "__main__":
-    
-    rcon = RconHandler(HOST, PORT, PASSWORD)
-    try:
-        # 指定時刻にコマンドを実行する場合
-        # rcon.execute_command_at_time(
-        #     ConstCommand.DESTROY_WILD_DINOS,
-        #     TARGET_TIMES,
-        #     notify_time=NOTIFY_TIMES,
-        #     notify_message=NOTIFY_MESSAGE
-        # )
 
-        # 起動してから一定時間ごとにコマンドを実行する場合
-        rcon.execute_command_periodically(
-            ConstCommand.DESTROY_WILD_DINOS,
-            interval_seconds=PERIODIC_INTERVAL_SECONDS,
-            notify_time=NOTIFY_TIMES,
-            notify_message=NOTIFY_MESSAGE
-        )
-        # rcon.execute_command_periodically(ConstCommand.DESTROY_WILD_DINOS, ConstTime.MINUTE_1)
-    except Exception as e:
-        print(f"エラー: {e}")
+# ===== GUI =====
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("ARK RCON Manager")
+        self.resizable(False, False)
+
+        self._stop_event = None
+        self._worker_thread = None
+
+        self._build_ui()
+
+    def _build_ui(self):
+        pad = {"padx": 8, "pady": 4}
+
+        # ── 接続設定 ──────────────────────────────────────────
+        conn_frame = ttk.LabelFrame(self, text="接続設定")
+        conn_frame.grid(row=0, column=0, columnspan=2, sticky="ew", **pad)
+
+        ttk.Label(conn_frame, text="Host:").grid(row=0, column=0, sticky="e", **pad)
+        self._host = ttk.Entry(conn_frame, width=20)
+        self._host.insert(0, str(HOST))
+        self._host.grid(row=0, column=1, sticky="w", **pad)
+
+        ttk.Label(conn_frame, text="Port:").grid(row=0, column=2, sticky="e", **pad)
+        self._port = ttk.Entry(conn_frame, width=8)
+        self._port.insert(0, str(PORT))
+        self._port.grid(row=0, column=3, sticky="w", **pad)
+
+        ttk.Label(conn_frame, text="Password:").grid(row=0, column=4, sticky="e", **pad)
+        self._password = ttk.Entry(conn_frame, width=20, show="*")
+        self._password.insert(0, PASSWORD)
+        self._password.grid(row=0, column=5, sticky="w", **pad)
+
+        # ── コマンド送信（即時） ──────────────────────────────
+        cmd_frame = ttk.LabelFrame(self, text="コマンド送信（即時）")
+        cmd_frame.grid(row=1, column=0, columnspan=2, sticky="ew", **pad)
+
+        ttk.Label(cmd_frame, text="コマンド:").grid(row=0, column=0, sticky="e", **pad)
+        self._single_cmd = ttk.Combobox(cmd_frame, width=30,
+            values=[ConstCommand.DESTROY_WILD_DINOS, ConstCommand.SHUTDOWN_SERVER])
+        self._single_cmd.set(ConstCommand.DESTROY_WILD_DINOS)
+        self._single_cmd.grid(row=0, column=1, sticky="w", **pad)
+
+        ttk.Button(cmd_frame, text="実行", command=self._run_single_command).grid(
+            row=0, column=2, **pad)
+
+        # ── スケジュール設定 ──────────────────────────────────
+        sched_frame = ttk.LabelFrame(self, text="スケジュール実行")
+        sched_frame.grid(row=2, column=0, columnspan=2, sticky="ew", **pad)
+
+        # 実行モード
+        ttk.Label(sched_frame, text="実行モード:").grid(row=0, column=0, sticky="e", **pad)
+        self._mode = tk.StringVar(value="periodic")
+        ttk.Radiobutton(sched_frame, text="定期実行（間隔）", variable=self._mode,
+                        value="periodic", command=self._on_mode_change).grid(
+            row=0, column=1, sticky="w", **pad)
+        ttk.Radiobutton(sched_frame, text="時刻指定実行", variable=self._mode,
+                        value="at_time", command=self._on_mode_change).grid(
+            row=0, column=2, sticky="w", **pad)
+
+        # コマンド
+        ttk.Label(sched_frame, text="コマンド:").grid(row=1, column=0, sticky="e", **pad)
+        self._sched_cmd = ttk.Combobox(sched_frame, width=30,
+            values=[ConstCommand.DESTROY_WILD_DINOS, ConstCommand.SHUTDOWN_SERVER])
+        self._sched_cmd.set(ConstCommand.DESTROY_WILD_DINOS)
+        self._sched_cmd.grid(row=1, column=1, columnspan=2, sticky="w", **pad)
+
+        # 定期実行：間隔（秒）
+        self._interval_label = ttk.Label(sched_frame, text="間隔（秒）:")
+        self._interval_label.grid(row=2, column=0, sticky="e", **pad)
+        self._interval = ttk.Entry(sched_frame, width=12)
+        self._interval.insert(0, str(ConstTime.HOUR * 6))
+        self._interval.grid(row=2, column=1, sticky="w", **pad)
+
+        # 時刻指定：実行時刻
+        self._times_label = ttk.Label(sched_frame, text="実行時刻 (カンマ区切り H:MM):")
+        self._times_label.grid(row=3, column=0, sticky="e", **pad)
+        self._target_times = ttk.Entry(sched_frame, width=35)
+        self._target_times.insert(0, "00:00, 06:00, 12:00, 18:00")
+        self._target_times.grid(row=3, column=1, columnspan=2, sticky="w", **pad)
+
+        # 通知時間
+        ttk.Label(sched_frame, text="通知時間 (カンマ区切り H:MM):").grid(
+            row=4, column=0, sticky="e", **pad)
+        self._notify_times = ttk.Entry(sched_frame, width=35)
+        self._notify_times.insert(0, "1:00, 0:30, 0:10")
+        self._notify_times.grid(row=4, column=1, columnspan=2, sticky="w", **pad)
+
+        # 通知メッセージ
+        ttk.Label(sched_frame, text="通知メッセージ:").grid(row=5, column=0, sticky="e", **pad)
+        self._notify_msg = ttk.Entry(sched_frame, width=55)
+        self._notify_msg.insert(0, "{remaining_minutes} minutes until {command} command is executed")
+        self._notify_msg.grid(row=5, column=1, columnspan=2, sticky="w", **pad)
+
+        # 開始/停止ボタン
+        btn_frame = ttk.Frame(sched_frame)
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=(4, 8))
+        self._start_btn = ttk.Button(btn_frame, text="開始", command=self._start_schedule)
+        self._start_btn.grid(row=0, column=0, padx=8)
+        self._stop_btn = ttk.Button(btn_frame, text="停止", command=self._stop_schedule, state="disabled")
+        self._stop_btn.grid(row=0, column=1, padx=8)
+
+        # ── ログ ─────────────────────────────────────────────
+        log_frame = ttk.LabelFrame(self, text="ログ")
+        log_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", **pad)
+        self._log = scrolledtext.ScrolledText(log_frame, width=80, height=14,
+                                              state="disabled", font=("Consolas", 9))
+        self._log.pack(fill="both", expand=True, padx=4, pady=4)
+
+        ttk.Button(self, text="ログをクリア", command=self._clear_log).grid(
+            row=4, column=0, sticky="w", **pad)
+
+        self._on_mode_change()
+
+    # ── ヘルパー ─────────────────────────────────────────────
+
+    def _on_mode_change(self):
+        mode = self._mode.get()
+        if mode == "periodic":
+            self._interval.config(state="normal")
+            self._target_times.config(state="disabled")
+        else:
+            self._interval.config(state="disabled")
+            self._target_times.config(state="normal")
+
+    def _log_write(self, msg):
+        """スレッドセーフなログ書き込み（after 経由で UI スレッドに投げる）"""
+        self.after(0, self._log_append, msg)
+
+    def _log_append(self, msg):
+        self._log.config(state="normal")
+        self._log.insert(tk.END, f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+        self._log.see(tk.END)
+        self._log.config(state="disabled")
+
+    def _clear_log(self):
+        self._log.config(state="normal")
+        self._log.delete("1.0", tk.END)
+        self._log.config(state="disabled")
+
+    def _get_rcon(self):
+        host = self._host.get().strip()
+        port_str = self._port.get().strip()
+        password = self._password.get()
+        if not host or not port_str:
+            raise ValueError("Host と Port を入力してください")
+        return RconHandler(host, int(port_str), password)
+
+    def _parse_time_list(self, text):
+        """カンマ区切り文字列を ["H:MM", ...] リストに変換"""
+        return [t.strip() for t in text.split(",") if t.strip()]
+
+    # ── 即時コマンド ─────────────────────────────────────────
+
+    def _run_single_command(self):
+        command = self._single_cmd.get().strip()
+        if not command:
+            messagebox.showwarning("警告", "コマンドを入力してください")
+            return
+
+        def task():
+            try:
+                rcon = self._get_rcon()
+                self._log_write(f"実行中: {command}")
+                response = rcon.execute_command(command)
+                self._log_write(f"結果: {response}")
+            except Exception as e:
+                self._log_write(f"エラー: {e}")
+
+        threading.Thread(target=task, daemon=True).start()
+
+    # ── スケジュール実行 ──────────────────────────────────────
+
+    def _start_schedule(self):
+        command = self._sched_cmd.get().strip()
+        if not command:
+            messagebox.showwarning("警告", "コマンドを入力してください")
+            return
+
+        notify_times_raw = self._parse_time_list(self._notify_times.get())
+        notify_times = notify_times_raw if notify_times_raw else None
+        notify_msg = self._notify_msg.get().strip() or None
+
+        try:
+            rcon = self._get_rcon()
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+            return
+
+        self._stop_event = threading.Event()
+        mode = self._mode.get()
+
+        if mode == "periodic":
+            try:
+                interval = int(self._interval.get().strip())
+            except ValueError:
+                messagebox.showerror("エラー", "間隔は整数（秒）で入力してください")
+                return
+
+            def task():
+                try:
+                    self._log_write(f"定期実行開始: {command}  間隔: {interval}秒")
+                    rcon.execute_command_periodically(
+                        command,
+                        interval_seconds=interval,
+                        notify_time=notify_times,
+                        notify_message=notify_msg,
+                        stop_event=self._stop_event,
+                        log_callback=self._log_write,
+                    )
+                except Exception as e:
+                    self._log_write(f"スケジュールエラー: {e}")
+                finally:
+                    self.after(0, self._on_schedule_stopped)
+
+        else:  # at_time
+            target_times = self._parse_time_list(self._target_times.get())
+            if not target_times:
+                messagebox.showwarning("警告", "実行時刻を入力してください")
+                return
+
+            def task():
+                try:
+                    self._log_write(f"時刻指定実行開始: {command}  時刻: {target_times}")
+                    rcon.execute_command_at_time(
+                        command,
+                        target_times,
+                        notify_time=notify_times,
+                        notify_message=notify_msg,
+                        stop_event=self._stop_event,
+                        log_callback=self._log_write,
+                    )
+                except Exception as e:
+                    self._log_write(f"スケジュールエラー: {e}")
+                finally:
+                    self.after(0, self._on_schedule_stopped)
+
+        self._worker_thread = threading.Thread(target=task, daemon=True)
+        self._worker_thread.start()
+
+        self._start_btn.config(state="disabled")
+        self._stop_btn.config(state="normal")
+
+    def _stop_schedule(self):
+        if self._stop_event:
+            self._stop_event.set()
+            self._log_write("停止シグナル送信済み。最大1秒以内に停止します...")
+
+    def _on_schedule_stopped(self):
+        self._start_btn.config(state="normal")
+        self._stop_btn.config(state="disabled")
+        self._log_write("スケジュール停止しました")
+
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
